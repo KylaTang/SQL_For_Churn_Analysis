@@ -1,0 +1,340 @@
+
+use mydemo;
+#Note: the code below used for "bash" or here, to load local file into SQL environment
+#SELECT COUNT(*) AS total num FROM telco_churn;
+#LOAD DATA LOCAL INFILE '/CSS/WA_Fn-UseC_-Telco-Customer-Churn.csv'
+#INTO TABLE telco_churn
+#FIELDS TERMINATED BY ','
+#OPTIONALLY ENCLOSED BY '"'
+#LINES TERMINATED BY '\n'
+#IGNORE 1 ROWS;
+
+#Step 1: Check dataset and variable type
+SELECT * FROM telco_churn LIMIT 5;
+DESCRIBE telco_churn;
+
+
+#Step 2: Data clean (NA)
+# Create NA check function here
+DROP PROCEDURE IF EXISTS CheckNA;
+
+DELIMITER //
+
+CREATE PROCEDURE CheckNA(IN tbl VARCHAR(64))
+
+BEGIN
+    DECLARE gc TEXT DEFAULT '';
+
+    SELECT COALESCE(GROUP_CONCAT(
+        CONCAT(
+            'SUM(CASE WHEN `', column_name,
+            '` IS NULL OR `', column_name,
+            '` = '''' THEN 1 ELSE 0 END) AS `',
+            column_name, '_NA`'
+        )
+        SEPARATOR ', \n'
+    ), '') INTO gc
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE table_schema = DATABASE()
+        AND table_name = tbl;
+
+    IF gc != '' THEN
+
+        SET @sql = CONCAT(
+            'SELECT ',
+            gc,
+            ' FROM ', tbl
+        );
+
+        PREPARE stmt FROM @sql;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    ELSE
+        SELECT 'No columns found or table does not exist' AS message;
+    END IF;
+END //
+
+DELIMITER ;
+
+CALL CheckNA('telco_churn');
+
+SELECT
+    customerID,
+    tenure,
+    TotalCharges
+FROM telco_churn
+WHERE TotalCharges = ''
+   OR TotalCharges IS NULL
+   OR tenure IS NULL
+LIMIT 20;
+-- Found "tenure" & "TotalCharges" have 11 NA values. Next it's to check NA if they contain important information.
+-- From the result, it seems those users are new registers, so that the tenure is short and charges aren't available yet.
+-- In this case, we can delete these NA values directly.
+
+#NA delete & check again
+DELETE FROM telco_churn
+WHERE (TotalCharges IS NULL OR TRIM(TotalCharges) = '')
+   OR tenure IS NULL;
+
+SELECT COUNT(*) AS NA_num FROM telco_churn
+WHERE TotalCharges IS NULL  OR tenure IS NULL;
+
+
+#Step 3:EDA
+-- can use "DESCRIBE telco_churn;" to check type of variables
+
+#3.1 Churn Overall Distribution
+SELECT
+    Churn,
+    COUNT(*) AS Total_Customer,
+    ROUND(COUNT(*) * 100 / (SELECT COUNT(*) FROM telco_churn), 2) AS Percent
+FROM telco_churn
+GROUP BY Churn;
+
+
+#3.2: Descriptive Statistics for Numeric Variables
+SELECT 'tenure' AS Num_Variable, MIN(tenure), MAX(tenure), AVG(tenure), STD(tenure) FROM telco_churn
+UNION ALL
+#SELECT 'SeniorCitizen', MIN(SeniorCitizen), MAX(SeniorCitizen), AVG(SeniorCitizen), STD(SeniorCitizen) FROM telco_churn
+#UNION ALL
+SELECT 'MonthlyCharges', MIN(MonthlyCharges), MAX(MonthlyCharges), AVG(MonthlyCharges), STD(MonthlyCharges) FROM telco_churn
+UNION ALL
+SELECT 'TotalCharges', MIN(TotalCharges), MAX(TotalCharges), AVG(TotalCharges), STD(TotalCharges) FROM telco_churn;
+
+
+#3.3: Distribution plot for Catagorical Variables
+-- Churn over Gender,Age(SeniorCitizen),Partner
+
+SELECT
+    CASE WHEN SeniorCitizen = 1 THEN 'Senior' ELSE 'Non-senior' END AS Age,
+    Churn,
+    COUNT(*),
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY SeniorCitizen), 2) AS Per_ingroup
+FROM telco_churn
+GROUP BY SeniorCitizen, Churn
+ORDER BY SeniorCitizen, Churn;
+
+-- An overview "User_level" features (simpler view)
+SELECT
+    user_feature,
+    value,
+    total,
+    churn_1,
+    100 - churn_1 AS churn_0
+FROM (
+    SELECT
+        'gender' AS user_feature,
+        gender AS value,
+        COUNT(*) AS total,
+        ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2) AS churn_1
+    FROM telco_churn
+    GROUP BY gender
+
+    UNION ALL
+    SELECT 'SeniorCitizen', SeniorCitizen, COUNT(*),
+           ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
+    FROM telco_churn GROUP BY SeniorCitizen
+
+    UNION ALL
+    SELECT 'Partner', Partner, COUNT(*),
+           ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
+    FROM telco_churn GROUP BY Partner
+
+    UNION ALL
+    SELECT 'StreamingTV', Dependents, COUNT(*),
+           ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
+    FROM telco_churn GROUP BY Dependents
+) AS features
+ORDER BY user_feature, churn_1 DESC;
+
+-- An overview "Service_level" features (simpler view)
+SELECT
+    service_feature,
+    value,
+    total,
+    churn_1,
+    100 - churn_1 AS churn_0
+FROM (
+    SELECT
+        'PhoneService' AS service_feature,
+        PhoneService AS value,
+        COUNT(*) AS total,
+        ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2) AS churn_1
+    FROM telco_churn
+    GROUP BY PhoneService
+
+    UNION ALL
+    SELECT 'InternetService', InternetService, COUNT(*),
+           ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
+    FROM telco_churn GROUP BY InternetService
+    UNION ALL
+    SELECT 'StreamingTV', Dependents, COUNT(*),
+           ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
+    FROM telco_churn GROUP BY Dependents
+    UNION ALL
+    SELECT 'StreamingMovies', Dependents, COUNT(*),
+           ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
+    FROM telco_churn GROUP BY Dependents
+) AS features
+ORDER BY service_feature, churn_1 DESC;
+
+-- From experience I feel various age and gender have massively different patterns
+-- So I prefer to check groups features. This is a good way to come up with deliver market strategy quickly
+-- Here I check Churn over groups with factors of Gender and Age
+SELECT
+    Churn,
+    gender,
+    SeniorCitizen,
+    COUNT(*),
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*))OVER(), 2) AS Per_total_Churn
+FROM telco_churn
+GROUP BY gender,SeniorCitizen,Churn
+ORDER BY Churn,gender;
+
+#Q:是否合并到下表?
+SELECT
+   Churn,StreamingTV,StreamingMovies,
+    COUNT(*) AS Total_Customers,
+    -- Churn_customers in each group over total Churn_customers
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS Per_total_Churn
+
+    FROM telco_churn
+    GROUP BY Churn,StreamingTV,StreamingMovies
+    ORDER BY Churn;
+
+
+-- Internet Service and Churn of ingroup and total customers
+SELECT
+    InternetService,
+    -- groups of value-added Internet service
+    (CASE WHEN OnlineSecurity = 'Yes' THEN 1 ELSE 0 END +
+     CASE WHEN TechSupport = 'Yes' THEN 1 ELSE 0 END +
+     CASE WHEN OnlineBackup = 'Yes' THEN 1 ELSE 0 END +
+     CASE WHEN DeviceProtection = 'Yes' THEN 1 ELSE 0 END
+     #CASE WHEN StreamingTV = 'Yes' THEN 1 ELSE 0 END +
+     #CASE WHEN StreamingMovies = 'Yes' THEN 1 ELSE 0 END
+     )
+     AS Additional_Internet,
+
+    COUNT(*) AS Total_Customers,
+    -- Percentage of Churn_customers in the group over total customers in the group
+    SUM(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END) AS Churn_Customers,
+    ROUND(SUM(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS Per_ingroup_Churn,
+    -- Churn_customers in each group over total Churn_customers
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS Per_total_Churn
+
+FROM telco_churn
+GROUP BY InternetService, Additional_Internet
+ORDER BY InternetService, Additional_Internet;
+
+
+-- Contract and Churn of ingroup and total customers
+SELECT
+    Contract,
+    Churn,
+    COUNT(*),
+    -- Percentage of Churn_customers in the group over total customers in the group
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY Contract), 2) AS Per_ingroup_Churn,
+    -- Churn_customers in each group over total Churn_customers
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS Per_total_Churn
+FROM telco_churn
+GROUP BY Churn,Contract
+ORDER BY Churn,Contract;
+
+
+
+#Step 4: RFM to define CLV
+DROP VIEW IF EXISTS v_churn_analysis;
+CREATE OR REPLACE VIEW v_churn_analysis AS
+SELECT *,
+      # -- churn =1/0
+      #CASE
+       # WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1
+        #WHEN REPLACE(Churn, '\r', '') = 'No' THEN 0
+        #ELSE 0
+   # END AS Churn_1,
+
+    -- M:MonthlyCharges, AVG: ~64, range of MonthlyCharges: 18.25-118.75
+    CASE
+        WHEN MonthlyCharges < 35 THEN 1
+        WHEN MonthlyCharges BETWEEN 35 AND 70 THEN 2
+        ELSE 3
+    END AS  M_Score,
+
+    -- R: tenure,0-72(loyalty)
+    CASE
+        WHEN tenure < 13 THEN 1
+        WHEN tenure BETWEEN 13 AND 48 THEN 2
+        ELSE 3
+        END AS R_Score,
+
+    -- proxy "Frequency": service number
+    (PhoneService = 'Yes')
+    + (InternetService  != 'No') #'DSL','Fiber optic','No'
+    + (OnlineSecurity = 'Yes')
+    + (OnlineBackup = 'Yes')
+    + (DeviceProtection = 'Yes')
+    + (TechSupport = 'Yes')
+    + (StreamingTV = 'Yes')
+    + (StreamingMovies = 'Yes')
+        AS Service_Score,
+
+    #(M_Score + R_Score + ServiceScore) AS Total_Value_Score1
+(
+    CASE WHEN MonthlyCharges < 35 THEN 1
+        WHEN MonthlyCharges BETWEEN 35 AND 70 THEN 2
+        ELSE 3 END +
+    CASE WHEN tenure < 13 THEN 1
+        WHEN tenure BETWEEN 13 AND 48 THEN 2
+        ELSE 3 END +
+        (PhoneService = 'Yes') + (InternetService != 'No') + (OnlineSecurity = 'Yes') +
+        (OnlineBackup = 'Yes') + (DeviceProtection = 'Yes') + (TechSupport = 'Yes') +
+        (StreamingTV = 'Yes') + (StreamingMovies = 'Yes')
+    )
+    AS Total_Score
+FROM telco_churn;
+
+# Customer Value Groups
+CREATE OR REPLACE VIEW value_churn_analysis AS
+SELECT *,
+        CASE WHEN Total_Score >= 11 THEN 'High'
+        WHEN Total_Score >= 8 THEN 'Middle'
+        ELSE 'Low'
+    END AS Value_level
+FROM v_churn_analysis;
+SELECT * FROM value_churn_analysis
+
+#Step 5. Further Analysis: High Churn Group Persona and Customer Value
+CREATE OR REPLACE VIEW high_churn AS
+SELECT
+    Total_Score,
+    Value_level,
+    COUNT(*) AS Total_Customers,
+    SUM(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END) AS Churn_Customers,
+    ROUND(SUM(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS Churn_Rate
+FROM value_churn_analysis
+GROUP BY Total_Score, Value_level
+HAVING Churn_Rate > 30 #AND COUNT(*) > 10
+ORDER BY Churn_Rate DESC
+LIMIT 10;
+
+-- Get a list of the customer group who has a high churn rate(>30%), and then get the persona of those customers
+-- There are 500 high churn customers and evenly belong to "Low-" and "Middle-value" group.
+-- The Middle-value customers mainly have 4 services, tenure of "<48 months" and high monthly charges.
+-- The Low-value customers mainly have 2-3 services, tenure of "<12 months" and high monthly charges.
+
+SELECT
+    vca.*
+    #vca.M_Score, vca.R_Score, vca.Service_Score, vca.Total_Score, vca.Value_level
+FROM value_churn_analysis vca
+JOIN high_churn hcs ON vca.Total_Score = hcs.Total_Score AND vca.Value_level = hcs.Value_level
+WHERE REPLACE(vca.Churn, '\r', '') = 'Yes'
+#LIMIT 10;
+
+
+
+
+
+
+
+
