@@ -1,6 +1,6 @@
 
 use mydemo;
-#Note: the code below also can used to load local file into SQL environment
+#Note: the code below used for "bash" or here, to load local file into SQL environment
 #SELECT COUNT(*) AS total num FROM telco_churn;
 #LOAD DATA LOCAL INFILE '/CSS/WA_Fn-UseC_-Telco-Customer-Churn.csv'
 #INTO TABLE telco_churn
@@ -11,6 +11,7 @@ use mydemo;
 
 #Step 1: Check dataset and variable type
 SELECT * FROM telco_churn LIMIT 5;
+
 DESCRIBE telco_churn;
 
 
@@ -103,16 +104,6 @@ SELECT 'TotalCharges', MIN(TotalCharges), MAX(TotalCharges), AVG(TotalCharges), 
 
 
 #3.3: Distribution plot for Catagorical Variables
--- Churn over Gender,Age(SeniorCitizen),Partner
-
-SELECT
-    CASE WHEN SeniorCitizen = 1 THEN 'Senior' ELSE 'Non-senior' END AS Age,
-    Churn,
-    COUNT(*),
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY SeniorCitizen), 2) AS Per_ingroup
-FROM telco_churn
-GROUP BY SeniorCitizen, Churn
-ORDER BY SeniorCitizen, Churn;
 
 -- An overview "User_level" features (simpler view)
 SELECT
@@ -139,11 +130,6 @@ FROM (
     SELECT 'Partner', Partner, COUNT(*),
            ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
     FROM telco_churn GROUP BY Partner
-
-    UNION ALL
-    SELECT 'StreamingTV', Dependents, COUNT(*),
-           ROUND(AVG(CASE WHEN REPLACE(Churn, '\r', '') = 'Yes' THEN 1 ELSE 0 END)*100, 2)
-    FROM telco_churn GROUP BY Dependents
 ) AS features
 ORDER BY user_feature, churn_1 DESC;
 
@@ -178,6 +164,19 @@ FROM (
 ) AS features
 ORDER BY service_feature, churn_1 DESC;
 
+
+# You can also do this:
+-- a) Compare one factor alone to see a clear pattern
+    SELECT
+    CASE WHEN SeniorCitizen = 1 THEN 'Senior' ELSE 'Non-senior' END AS Age,
+    Churn,
+    COUNT(*),
+    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(PARTITION BY SeniorCitizen), 2) AS Per_ingroup
+FROM telco_churn
+GROUP BY SeniorCitizen, Churn
+ORDER BY SeniorCitizen, Churn;
+
+-- b) group multi-factors to find out correlation:
 -- From experience I feel various age and gender have massively different patterns
 -- So I prefer to check groups features. This is a good way to come up with deliver market strategy quickly
 -- Here I check Churn over groups with factors of Gender and Age
@@ -191,18 +190,7 @@ FROM telco_churn
 GROUP BY gender,SeniorCitizen,Churn
 ORDER BY Churn,gender;
 
-#Q:是否合并到下表?
-SELECT
-   Churn,StreamingTV,StreamingMovies,
-    COUNT(*) AS Total_Customers,
-    -- Churn_customers in each group over total Churn_customers
-    ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER(), 2) AS Per_total_Churn
-
-    FROM telco_churn
-    GROUP BY Churn,StreamingTV,StreamingMovies
-    ORDER BY Churn;
-
-
+-- c) search more about sub-types under the main feature
 -- Internet Service and Churn of ingroup and total customers
 SELECT
     InternetService,
@@ -226,7 +214,6 @@ SELECT
 FROM telco_churn
 GROUP BY InternetService, Additional_Internet
 ORDER BY InternetService, Additional_Internet;
-
 
 -- Contract and Churn of ingroup and total customers
 SELECT
