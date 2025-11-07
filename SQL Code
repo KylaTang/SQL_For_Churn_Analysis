@@ -1,6 +1,6 @@
 
 use mydemo;
-#Note: the code below used for "bash" or here, to load local file into SQL environment
+#Note: the code below also can used to load local file into SQL environment
 #SELECT COUNT(*) AS total num FROM telco_churn;
 #LOAD DATA LOCAL INFILE '/CSS/WA_Fn-UseC_-Telco-Customer-Churn.csv'
 #INTO TABLE telco_churn
